@@ -16,5 +16,35 @@
   },
   "scripts": {
     "start": "cds-serve"
+  },
+  "cds": {
+    "requires": {
+      "db": {
+        "impl": "@cap-js/postgres",
+        "pool": {
+          "max": 20
+        }
+      },
+      "auth": {
+        "[production]": {
+          "strategy": "JWT"
+        },
+        "[test]": {
+          "strategy": "mock"
+        }
+      },
+      "API_OPLACCTGDOCITEMCUBE_SRV": {
+        "kind": "odata-v2",
+        "model": "srv/external/API_OPLACCTGDOCITEMCUBE_SRV",
+        "csrf": true,
+        "csrfInBatch": true,
+        "[production]": {
+          "credentials": {
+            "destination": "S4HANA",
+            "path": "/sap/opu/odata/sap/API_OPLACCTGDOCITEMCUBE_SRV"
+          }
+        }
+      }
+    }
   }
 }
