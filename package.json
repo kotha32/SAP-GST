@@ -6,13 +6,20 @@
   "license": "UNLICENSED",
   "private": true,
   "dependencies": {
-    "@sap/cds": "^8.1.1",
-    "@sap/cds-dk": "^8.1.2",
-    "express": "^4"
+    "@sap/cds": "^8",
+    "@sap/cds-compiler": "^5.1.2",
+    "express": "^4",
+    "uuid": "^10.0.0"
   },
   "devDependencies": {
-    "@cap-js/cds-types": "^0.6",
-    "@cap-js/sqlite": "^1"
+    "@cap-js/postgres": "^1.10.0",
+    "@sap-cloud-sdk/http-client": "^3.18.1",
+    "@sap-cloud-sdk/resilience": "^3.18.1",
+    "@sap/cds": "^8.1.1",
+    "@sap/cds-dk": "^8.1.1",
+    "express": "^4.19.2",
+    "pg": "^8.12.0",
+    "postgres": "^3.4.4"
   },
   "scripts": {
     "start": "cds-serve"
