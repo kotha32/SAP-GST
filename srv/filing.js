@@ -33,13 +33,14 @@ module.exports = cds.service.impl(async function() {
                 'CompanyCode',
                 'FiscalYear',
                 'AccountingDocument',
+                'AccountingDocumentItem',
                 'PostingDate',
                 'AccountingDocumentType',
                 'DocumentReferenceID',
-                'AmountInTransactionCurrency'
+                'GLAccount',
+                'TaxCode'
             ])
-            .where(`AccountingDocumentType IN ('RV', 'DR', 'DG', 'RE', 'KR', 'KG')`)
-            .limit(2000);
+            .where(`AccountingDocumentType IN ('RV', 'DR', 'DG', 'RE', 'KR', 'KG')`);
     
         try {
             // Fetch data from the remote API
@@ -63,12 +64,11 @@ module.exports = cds.service.impl(async function() {
             // Fetch existing records from the gstlocal table
             const existingRecords = await cds.run(
                 SELECT.from(gstlocal)
-                    .columns('CompanyCode', 'FiscalYear', 'AccountingDocument')
+                    .columns(['CompanyCode', 'FiscalYear', 'AccountingDocument'])
                     .where({
                         CompanyCode: { in: groupedData.map(r => r.CompanyCode) },
                         FiscalYear: { in: groupedData.map(r => r.FiscalYear) },
-                        AccountingDocument: { in: groupedData.map(r => r.AccountingDocument) },
-    
+                        AccountingDocument: { in: groupedData.map(r => r.AccountingDocument) }
                     })
             );
     
@@ -77,7 +77,7 @@ module.exports = cds.service.impl(async function() {
                 return !existingRecords.some(existingRecord =>
                     existingRecord.CompanyCode === groupedRecord.CompanyCode &&
                     existingRecord.FiscalYear === groupedRecord.FiscalYear &&
-                    existingRecord.AccountingDocument === groupedRecord.AccountingDocument 
+                    existingRecord.AccountingDocument === groupedRecord.AccountingDocument
                 );
             });
     
@@ -88,11 +88,18 @@ module.exports = cds.service.impl(async function() {
             } else {
                 console.log("No new data to upsert.");
             }
+            // Fetch and return the upserted data sorted by AccountingDocument
+        const sortedResults = await cds.run(
+            SELECT.from(gstlocal)
+                .orderBy('AccountingDocument')
+        );
+        return sortedResults;
         } catch (error) {
             console.error("Error while fetching and upserting data from gstapi to gstlocal:", error);
             throw new Error("Data fetching or upserting failed");
         }
     });
+    
     
 
     this.before('READ', 'gstItems', async (req) => {
@@ -105,10 +112,12 @@ module.exports = cds.service.impl(async function() {
                 'GLAccount',
                 'TaxCode',
                 'CompanyCode',
-                'AccountingDocument'
+                'AccountingDocument',
+                'FiscalYear',
+                'AmountInTransactionCurrency'
             )
-            .where({ AccountingDocumentType: { in: ['RV', 'DR', 'DG', 'RE', 'KR', 'KG'] } })
-            .limit(2000);
+            .where({ AccountingDocumentType: { in: ['RV', 'DR', 'DG', 'RE', 'KR', 'KG'] } });
+            //.limit(2000);
     
         try {
             let sourceRecords = await gstapi.run(qry);
@@ -122,26 +131,29 @@ module.exports = cds.service.impl(async function() {
                 ID: uuidv4() // Generate UUID for each record
             }));
     
+            // Log the records after adding UUIDs
+            console.log('Records with UUIDs:', recordsWithUUID);
+    
             // Fetch existing records from the gstItems table
             const existingRecords = await cds.run(
                 SELECT.from(gstItems)
-                    .columns('AccountingDocumentItem', 'CompanyCode')
+                    .columns(['AccountingDocumentItem', 'FiscalYear'])
                     .where({
                         AccountingDocumentItem: { in: recordsWithUUID.map(r => r.AccountingDocumentItem) },
-                        CompanyCode: { in: recordsWithUUID.map(r => r.CompanyCode) }
+                        FiscalYear: { in: recordsWithUUID.map(r => r.FiscalYear) }
                     })
             );
     
             // Convert existing records to a map for fast lookup
             const existingMap = new Map();
             existingRecords.forEach(record => {
-                const key = `${record.AccountingDocumentItem}-${record.CompanyCode}`;
+                const key = `${record.AccountingDocumentItem}-${record.FiscalYear}`;
                 existingMap.set(key, record);
             });
     
             // Filter out records that already exist in the table
             const newRecords = recordsWithUUID.filter(record => {
-                const key = `${record.AccountingDocumentItem}-${record.CompanyCode}`;
+                const key = `${record.AccountingDocumentItem}-${record.FiscalYear}`;
                 return !existingMap.has(key);
             });
     
@@ -156,6 +168,6 @@ module.exports = cds.service.impl(async function() {
             console.error("Error while fetching and upserting data from gstapi to gstItems:", error);
             throw new Error("Data fetching or upserting failed");
         }
-    
     });
+    
 });
