@@ -170,4 +170,13 @@ module.exports = cds.service.impl(async function() {
         }
     });
     
+    this.on('ListReporter', async (req) => {
+        
+        console.log("DONE");
+
+        return true;
+    
+        
+    });
+    
 });
