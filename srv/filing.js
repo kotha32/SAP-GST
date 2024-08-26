@@ -1,72 +1,95 @@
 const cds = require('@sap/cds');
 const { v4: uuidv4 } = require('uuid');
 
-module.exports = cds.service.impl(async function() {
+module.exports = cds.service.impl(async function () {
     const gstapi = await cds.connect.to('API_OPLACCTGDOCITEMCUBE_SRV');
 
+    let fetchStatus = {
+        messages: ["Initializing..."],  
+        completed: false
+    };
+
+    const docTypes = ['RV', 'DR', 'DG', 'RE', 'KR', 'KG']; // Define the document types to filter by
+
+    // Function to handle the data fetching and upserting logic
     async function fetchAndUpsertData() {
-        const { gstlocal, gstItems, remote } = this.entities;
-
-        // Fetch records from the remote source
-        const qry = SELECT.from(remote)
-            .columns([
-                'CompanyCode',
-                'FiscalYear',
-                'AccountingDocument',
-                'AccountingDocumentItem',
-                'PostingDate',
-                'AccountingDocumentType',
-                'DocumentReferenceID',
-                'GLAccount',
-                'TaxCode',
-                'AmountInTransactionCurrency'
-            ])
-            .where({ AccountingDocumentType: { in: ['RV', 'DR', 'DG', 'RE', 'KR', 'KG'] } });
-        
         try {
-            let sourceRecords = await gstapi.run(qry);
-            console.log('Fetched Data:', sourceRecords);
+            const { gstlocal, gstItems, remote } = this.entities;
 
-            // Group and process data for gstlocal
+            // Fetch data for gstlocal with filtering by AccountingDocumentType
+            const qry = SELECT.from(remote)
+                .columns([
+                    'CompanyCode',
+                    'FiscalYear',
+                    'AccountingDocument',
+                    'AccountingDocumentItem',
+                    'AccountingDocumentType',
+                    'DocumentReferenceID',
+                    'GLAccount',
+                    'TaxCode'
+                ])
+                .where({ AccountingDocumentType: { in: docTypes } });
+
+            let res = await gstapi.run(qry);
+            console.log('Fetched Data:', res);
+
             const groupMap = new Map();
-            sourceRecords.forEach(item => {
+            res.forEach(item => {
                 const groupKey = `${item.CompanyCode}-${item.FiscalYear}-${item.AccountingDocument}`;
                 if (!groupMap.has(groupKey)) {
-                    item.ID = uuidv4(); // Generate UUID for new records
-                    groupMap.set(groupKey, item);  // Store only one record per group
+                    item.ID = uuidv4();
+                    groupMap.set(groupKey, item);
                 }
             });
 
             const groupedData = Array.from(groupMap.values());
-            const existingLocalRecords = await cds.run(
+
+            const existingRecords = await cds.run(
                 SELECT.from(gstlocal)
                     .columns(['CompanyCode', 'FiscalYear', 'AccountingDocument'])
                     .where({
                         CompanyCode: { in: groupedData.map(r => r.CompanyCode) },
                         FiscalYear: { in: groupedData.map(r => r.FiscalYear) },
-                        AccountingDocument: { in: groupedData.map(r => r.AccountingDocument) }
+                        AccountingDocument: { in: groupedData.map(r => r.AccountingDocument) },
+                        AccountingDocumentType: { in: docTypes }
                     })
             );
 
-            const newLocalRecords = groupedData.filter(groupedRecord => {
-                return !existingLocalRecords.some(existingRecord =>
+            const newRecords = groupedData.filter(groupedRecord => {
+                return !existingRecords.some(existingRecord =>
                     existingRecord.CompanyCode === groupedRecord.CompanyCode &&
                     existingRecord.FiscalYear === groupedRecord.FiscalYear &&
                     existingRecord.AccountingDocument === groupedRecord.AccountingDocument
                 );
             });
 
-            if (newLocalRecords.length > 0) {
-                await cds.run(UPSERT.into(gstlocal).entries(newLocalRecords));
-                console.log('Data upserted into gstlocal:', newLocalRecords);
+            // Upsert gstlocal data
+            if (newRecords.length > 0) {
+                await cds.run(UPSERT.into(gstlocal).entries(newRecords));
+                fetchStatus.messages.push("Data upserted successfully to gstlocal");
             } else {
-                console.log('No new data to upsert into gstlocal.');
+                fetchStatus.messages.push("No new data to upsert to gstlocal.");
             }
 
-            // Process and upsert data for gstItems
+            // Fetch data for gstItems with filtering by AccountingDocumentType
+            const qryItems = SELECT.from(remote)
+                .columns([
+                    'AccountingDocumentItem',
+                    'GLAccount',
+                    'TaxCode',
+                    'CompanyCode',
+                    'AccountingDocument',
+                    'FiscalYear',
+                    'AmountInTransactionCurrency'
+                ])
+                .where({ AccountingDocumentType: { in: docTypes } });
+
+            let sourceRecords = await gstapi.run(qryItems);
+            console.log('Fetched Data for gstItems:', sourceRecords);
+
             const recordsWithUUID = sourceRecords.map(record => ({
                 ...record,
-                ID: uuidv4() // Generate UUID for each record
+                ID: record.ID || uuidv4()
             }));
 
             const existingItemsRecords = await cds.run(
@@ -78,39 +101,151 @@ module.exports = cds.service.impl(async function() {
                     })
             );
 
-            const existingItemsMap = new Map();
+            const existingMap = new Map();
             existingItemsRecords.forEach(record => {
                 const key = `${record.AccountingDocumentItem}-${record.FiscalYear}`;
-                existingItemsMap.set(key, record);
+                existingMap.set(key, record);
             });
 
             const newItemsRecords = recordsWithUUID.filter(record => {
                 const key = `${record.AccountingDocumentItem}-${record.FiscalYear}`;
-                return !existingItemsMap.has(key);
+                return !existingMap.has(key);
             });
 
+            // Upsert gstItems data
             if (newItemsRecords.length > 0) {
                 await cds.run(UPSERT.into(gstItems).entries(newItemsRecords));
-                console.log('Upserted records with UUIDs into gstItems:', newItemsRecords);
+                fetchStatus.messages.push("Upserted records with UUIDs into gstItems");
             } else {
-                console.log('No new records to upsert into gstItems.');
+                fetchStatus.messages.push("No new records to upsert into gstItems.");
             }
 
+            // Handle LGSTTaxItem processing with batch processing
+            let lastsyncdate1 = await cds.run(
+                SELECT.one.from(gstlocal).columns('LastChangeDate').orderBy('LastChangeDate desc')
+            );
+
+            let counttaxdocs;
+            let taxlastsyncdatetime;
+
+            if (lastsyncdate1 && lastsyncdate1.LastChangeDate) {
+                taxlastsyncdatetime = lastsyncdate1.LastChangeDate.toISOString();
+                counttaxdocs = await gstapi.send({
+                    method: 'GET',
+                    path: `A_OperationalAcctgDocItemCube/$count?$filter=LastChangeDate gt datetimeoffset'${taxlastsyncdatetime}'`
+                });
+            } else {
+                counttaxdocs = await gstapi.send({
+                    method: 'GET',
+                    path: 'A_OperationalAcctgDocItemCube/$count'
+                });
+            }
+
+            if (counttaxdocs === 0) {
+                fetchStatus.messages.push('No new tax documents to process.');
+                fetchStatus.completed = true;
+                return { message: 'No new tax documents to process.', batchResults: [] };
+            }
+
+            const batchSize = 5000;
+            let count = 1;
+            const batchResults = [];
+            let newDataFetched = false;
+
+            for (let i = 0; i < counttaxdocs; i += batchSize) {
+                // Determine the upper limit of the current batch
+                let upperLimit = i + batchSize;
+                if (upperLimit > counttaxdocs) {
+                    upperLimit = counttaxdocs;  // Adjust if the upper limit exceeds the total count
+                }
+
+                const taxdocitemsQuery = {
+                    method: 'GET',
+                    path: `A_OperationalAcctgDocItemCube?$skip=${i}&$top=${batchSize}`
+                };
+
+                let results = await gstapi.send(taxdocitemsQuery);
+
+                results = results.map(item => {
+                    if (item.LastChangeDate) {
+                        item.LastChangeDate = convertSAPDateToISO(item.LastChangeDate);
+                    }
+                    item.ID = item.ID || uuidv4();
+                    return item;
+                });
+
+                results = removeDuplicateEntries(results);
+
+                // Filter results to include only those with desired AccountingDocumentType
+                results = results.filter(item => docTypes.includes(item.AccountingDocumentType));
+
+                if (results.length > 0) {
+                    newDataFetched = true;
+                    fetchStatus.messages.push(`Processing Batch ${count} (${i + 1} to ${upperLimit}) of ${counttaxdocs} records`);
+                    await cds.run(UPSERT.into(gstlocal).entries(results));
+                    batchResults.push(`Batch ${count} processed.`);
+                    count += 1;
+                } else {
+                    fetchStatus.messages.push(`Skipping batch ${count} due to missing or duplicate IDs`);
+                }
+
+                if (i === 0 && !newDataFetched) {
+                    fetchStatus.messages.push('No new records found in the first batch. Stopping further batch processing.');
+                    break;
+                }
+            }
+
+            if (newDataFetched) {
+                fetchStatus.messages.push('All records processed successfully.');
+            } else {
+                fetchStatus.messages.push('No new data to process after the initial batch. All records are fetched.');
+            }
+
+            fetchStatus.completed = true;
+            return { message: 'All records processed.', batchResults };
         } catch (error) {
-            console.error('Error while fetching and upserting data:', error);
-            throw new Error('Data fetching or upserting failed');
+            console.error("Error during data fetch and upsert operation:", error);
+            fetchStatus.messages.push("Error during data fetch and upsert operation");
+            fetchStatus.completed = true;
+            throw error;
         }
     }
 
-    // Register the fetchAndUpsertData handler
+    // Register the ListReporter handler
     this.on('ListReporter', async (req) => {
         try {
-            await fetchAndUpsertData.call(this);
-            console.log('Data fetch and upsert completed successfully.');
-            return { message: 'Data fetch and upsert completed successfully.' };
+            fetchStatus = { messages: ["Initializing..."], completed: false }; // Reset status
+            const result = await fetchAndUpsertData.call(this);
+            console.log("fetch status", fetchStatus);
+            return true;
         } catch (error) {
-            console.error('Error during data fetch and upsert operation:', error);
+            console.error("Error during ListReporter operation:", error);
             req.error(500, 'Error during data fetch and upsert operation');
         }
     });
+
+    // Register the StatusReporter handler
+    this.on('GSTFetchStatus', async (req) => {
+        console.log(fetchStatus);
+        return fetchStatus;
+    });
 });
+
+function convertSAPDateToISO(dateString) {
+    const timestamp = parseInt(dateString.match(/\d+/)[0], 10);
+    return new Date(timestamp).toISOString();
+}
+
+function removeDuplicateEntries(results) {
+    const uniqueResults = [];
+    const seenIds = new Set();
+
+    for (const item of results) {
+        if (!seenIds.has(item.ID)) {
+            uniqueResults.push(item);
+            seenIds.add(item.ID);
+        }
+    }
+
+    return uniqueResults;
+}

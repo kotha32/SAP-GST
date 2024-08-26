@@ -8,8 +8,6 @@ entity gst : managed, cuid {
     CompanyCode: String(10);
     @title: 'FiscalYear'
     FiscalYear: String(4);
-    @title:  'PostingDate'
-    PostingDate: DateTime;
     @title: 'AccountingDocument'
     AccountingDocument: String(10);
     @title: 'AccountingDocumentType'

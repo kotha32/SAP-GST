@@ -7,7 +7,6 @@ service satinfotech @(requires: 'authenticated-user') {
     FiscalYear,
     AccountingDocument,
     AccountingDocumentItem,
-    PostingDate,
     AccountingDocumentType,
     DocumentReferenceID,
     AmountInTransactionCurrency,
@@ -19,6 +18,7 @@ service satinfotech @(requires: 'authenticated-user') {
     entity gstlocal as projection on db.gst;
     entity gstItems as projection on db.gstItems;
     action ListReporter() returns String;
+    action GSTFetchStatus() returns String;
 }
 
 annotate satinfotech.gstlocal with @odata.draft.enabled;
